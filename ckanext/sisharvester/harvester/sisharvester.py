@@ -1,8 +1,4 @@
 from ckanext.harvest.harvesters.ckanharvester import CKANHarvester
-from __future__ import absolute_import
-import six
-import requests
-from requests.exceptions import HTTPError, RequestException
 
 import datetime
 import re
@@ -14,42 +10,30 @@ from ckan.lib.helpers import json
 from ckan.plugins import toolkit
 
 from ckanext.harvest.model import HarvestObject
-from .base import HarvesterBase
+from ckanext.harvest.harvesters.base import HarvesterBase
 
 import logging
 log = logging.getLogger(__name__)
 
-def extract_contact_info(data_dict):
-    return data_dict
 
 class SisHarvester(CKANHarvester):
+    def info(self):
+        return {
+            'name': 'sis_harvester',
+            'title': 'SIS harvester',
+            'description': 'Harvests remote SIS CKAN instance',
+            'form_config_interface': 'Text'
+        }    
+    
     '''Main plugin class of the ckanext-sisharvest extension.'''
     def _get_action_api_offset(self):
-        return '/api/%d/action' % self.action_api_version
+        return '/api/search/ckan/%s' % self.action_api_version
 
     def _get_search_api_offset(self):
-        print ('IN SIS HARBESTER API OFFSET')
-        #return '%s/package_search' % self._get_action_api_offset()
-        return '/package_search'    
-
-    def modify_package_dict(self, package_dict, harvest_object):
-        # Add tags
-        tags = package_dict['tags']
-
-        for tag in tags:
-            tag['display_name'] = tag.pop('display-name')
-            name = tag['name']
-            chars = ['/', '(', ')']
-            for char in chars:
-                if char in name:
-                    tag['name'] = re.sub(char, ' ', name)        
-        package_dict['tags'] = tags
-
-        # contact information
-        return package_dict
+        return '/package_search'
     
     def gather_stage(self, harvest_job):
-        log.debug('In CKANHarvester gather_stage (%s)',
+        log.debug('In SIS Harvester gather_stage (%s)',
                   harvest_job.source.url)
         toolkit.requires_ckan_version(min_version='2.0')
         get_all_packages = True
@@ -158,6 +142,109 @@ class SisHarvester(CKANHarvester):
             return object_ids
         except Exception as e:
             self._save_gather_error('%r' % e.message, harvest_job)
+
+    def modify_package_dict(self, package_dict, harvest_object):
+        '''
+            Allows custom harvesters to modify the package dict before
+            creating or updating the actual package.
+        '''
+        tags = package_dict['tags']
+
+        for tag in tags:
+            tag['display_name'] = tag.pop('display-name')
+            tag['name'] = ''.join(c if c not in '/,()' else ' ' if c in '()' else '' for c in tag['name'])
+                
+        package_dict['tags'] = tags
+        license = package_dict['license_id']
+        package_dict['license_id'] = extract_license(license)
+
+        # veröffentlichende stelle
+        package_dict['author'] = package_dict['organization']['publisher']['name']
+
+        # kontakt person und kontakt email
+        package_dict['maintainer'] = package_dict['publisher']['name']
+        maintainer_email = package_dict['organization']['publisher']['email']
+        package_dict['maintainer_email'] = maintainer_email.split(":", 1)[-1].strip()
+
+        # webadresse
+        package_dict['url'] = package_dict['publisher']['homepage']
+
+        extras = self.extras_dict(package_dict['extras'])
+
+        # veröffentlichungsdatum
+        extras['date_released'] = package_dict['metadata_created']
+        # aktuelizirungsdatum
+        extras['date_updated'] = package_dict['metadata_modified']
+
+        # internal dataset type:
+        if package_dict['type'] == 'dataset':
+            extras['berlin_type'] = 'datensatz'
+        else:
+            extras['berlin_type'] = package_dict['type']
+
+        # source:
+        extras['berlin_source'] = 'harvest-sis'
+
+        # geographical_granularity
+        extras['geographical_granularity'] = "Berlin"
+
+        # geographical_coverage
+        extras['geographical_coverage'] = "Berlin"
+
+        # temporal_granularity
+        extras['temporal_granularity'] = "Keine"
+
+        package_dict['extras'] = extras_as_list(extras)
+
+        # resource
+        resources = package_dict['resources']
+        resources_tmp = []
+
+        for resource in resources:
+            resource['name'] = resource['title']
+            resource['url'] = resource['access_url']
+
+            resources_tmp.append(resource)
+
+        package_dict['resources'] = resources_tmp
+
+        return package_dict
+
+    def extras_dict(self, extras_list):
+        '''Convert input `extras_list` to a conventional extras dict.'''
+        extras_dict = {}
+        for item in extras_list:
+            extras_dict[item['key']] = item['value']
+        return extras_dict
+
+def extract_license(license):
+    '''Extract `license_id` and `attribution_text` dataset metadata from
+    the CSW resource's ISO representation.'''
+    context = {'model': model}
+
+    license_list = get_action('license_list')(context, {})
+
+    if (license == "DLDE_BY_2_0"):
+        new_license_id = "dl-de-by-2.0"
+
+    log.info(f"replace license_id '{license}' with '{new_license_id}'")
+    
+    return new_license_id
+
+
+def extras_as_list(extras_dict):
+    '''Convert a simple extras dict to a list of key/value dicts.
+    Values that are themselves lists or dicts (as opposed to strings)
+    will be converted to JSON-strings.'''
+
+    extras_list = []
+    for key, value in extras_dict.items():
+        if isinstance(value, (list, dict)):
+            extras_list.append({'key': key, 'value': json.dumps(value)})
+        else:
+            extras_list.append({'key': key, 'value': value})
+
+    return extras_list
 
 class SearchError(Exception):
     pass
