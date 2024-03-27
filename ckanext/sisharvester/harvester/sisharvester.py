@@ -27,10 +27,10 @@ class SisHarvester(CKANHarvester):
     
     '''Main plugin class of the ckanext-sisharvest extension.'''
     def _get_action_api_offset(self):
-        return '/api/search/ckan/%s' % self.action_api_version
+        return '/api/search/ckan/'
 
     def _get_search_api_offset(self):
-        return '/package_search'
+        return '%s/package_search' % self._get_action_api_offset()
     
     def gather_stage(self, harvest_job):
         log.debug('In SIS Harvester gather_stage (%s)',
