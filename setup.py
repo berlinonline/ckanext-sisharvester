@@ -70,6 +70,6 @@ setup(
     # pip to create the appropriate form of executable for the target platform.
     entry_points=f'''
         [ckan.plugins]
-        sis_harvester=ckanext.sisharvester.harvester.sisharvester:SisHarvester
+        sis_harvester=ckanext.sisharvester.harvester:SisHarvester
     ''',
 )
